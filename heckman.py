@@ -1,3 +1,12 @@
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.base.model as base
+from statsmodels.iolib import summary
+from statsmodels.tools.numdiff import approx_fprime
+from scipy.stats import norm
+import warnings
+
 class Heckman(base.LikelihoodModel):
     """
     Class for Heckman correction for sample selection bias model.
@@ -939,13 +948,15 @@ class HeckmanResultsReg(base.LikelihoodModelResults):
         else:
             raise ValueError("Invalid method set")
             
-        if self.method_reg == 'elastic_net' and 0 < self.L1_wt < 1:
+        if self.method_reg == 'elastic_net' and 0 < self.L1_wt < 1 and alpha_reg == 0:
+            methodregstr = 'Elastic Net (No Regularization Penalty)'
+        elif self.method_reg == 'elastic_net' and 0 < self.L1_wt < 1 and alpha_reg > 0:
             methodregstr = 'Elastic Net'
-        elif self.method_reg == 'elastic_net' and self.L1_wt == 0:
+        elif self.method_reg == 'elastic_net' and self.L1_wt == 0 and alpha_reg > 0:
             methodregstr = 'Elastic Net (Ridge Fit)'
-        elif self.method_reg == 'elastic_net' and self.L1_wt == 1:
+        elif self.method_reg == 'elastic_net' and self.L1_wt == 1 and alpha_reg > 0:
             methodregstr = 'Elastic Net (Lasso Fit)'
-        elif self.method == 'sqrt_lasso':
+        elif self.method_reg == 'sqrt_lasso':
             methodregstr = 'Square-root Lasso'
         else:
             raise ValueError("Invalid regularization method set")

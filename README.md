@@ -1,5 +1,5 @@
 # heckman
-Heckman implementation from bert9bert's 1) unmerged branch for statsmodels 2), with additional wrapper for regularized fit (elastic net, ridge, lasso, and square-root lasso) inspired by fabmarcher's Stata package 3).
+Heckman implementation from bert9bert's[1] unmerged branch for statsmodels[2], with additional wrapper for regularized fit (elastic net, ridge, lasso, and square-root lasso) inspired by fabmarcher's Stata package[3].
 Plus a function to call shorter result summary as pandas DataFrame.
 
 ## Reference:
