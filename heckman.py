@@ -948,16 +948,20 @@ class HeckmanResultsReg(base.LikelihoodModelResults):
         else:
             raise ValueError("Invalid method set")
             
-        if self.method_reg == 'elastic_net' and 0 < self.L1_wt < 1 and alpha_reg == 0:
-            methodregstr = 'Elastic Net (No Regularization Penalty)'
-        elif self.method_reg == 'elastic_net' and 0 < self.L1_wt < 1 and alpha_reg > 0:
-            methodregstr = 'Elastic Net'
-        elif self.method_reg == 'elastic_net' and self.L1_wt == 0 and alpha_reg > 0:
-            methodregstr = 'Elastic Net (Ridge Fit)'
-        elif self.method_reg == 'elastic_net' and self.L1_wt == 1 and alpha_reg > 0:
-            methodregstr = 'Elastic Net (Lasso Fit)'
+        if self.alpha_reg == 0:
+            pen = ' (No Penalty)'
+        else:
+            pen = ''
+        
+        # if alpha_reg = 0 and L1_wt = 0 the fit_regularized() result = OLS fit()    
+        if self.method_reg == 'elastic_net' and 0 < self.L1_wt < 1:
+            methodregstr = 'Elastic Net' + pen
+        elif self.method_reg == 'elastic_net' and self.L1_wt == 0:
+            methodregstr = 'Elastic Net, Ridge Fit' + pen
+        elif self.method_reg == 'elastic_net' and self.L1_wt == 1:
+            methodregstr = 'Elastic Net, Lasso Fit' + pen
         elif self.method_reg == 'sqrt_lasso':
-            methodregstr = 'Square-root Lasso'
+            methodregstr = 'Square-root Lasso' + pen
         else:
             raise ValueError("Invalid regularization method set")
 
