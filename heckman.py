@@ -154,7 +154,7 @@ class Heckman(base.LikelihoodModel):
         Parameters
         ----------
         method : str
-            Can only be "twostep", which uses Heckman's two-step method.
+            Can only be "2step", which uses Heckman's two-step method.
         start_params_mle: 1darray
             If using MLE, starting parameters.
         method_mle: str
@@ -196,118 +196,6 @@ class Heckman(base.LikelihoodModel):
         return results
 
 
-    def fit_regularized(self, method_reg='elastic_net', alpha_reg=0.0, L1_wt=1.0, start_params_reg=None, profile_scale=False, refit=False, **kwargs):
-        """
-        Fit the second stage of Heckman selection model in elastic net or square-root Lasso.
-        Parameters
-        ----------
-        method : str
-            Either ‘elastic_net’ or ‘sqrt_lasso’.
-        alpha: scalar or array_like
-            The penalty weight. If a scalar, the same penalty weight applies to all variables in the model.
-            If a vector, it must have the same length as params, and contains a penalty weight for each coefficient.
-        L1_wt: scalar
-            The fraction of the penalty given to the L1 penalty term.
-            Must be between 0 and 1 (inclusive).
-            If 0, the fit is a ridge fit, if 1 it is a lasso fit.
-        start_params: array_like
-            Starting values for params.
-        profile_scale: bool
-            If True the penalized fit is computed using the profile (concentrated) log-likelihood for the Gaussian model.
-            Otherwise the fit uses the residual sum of squares (RSS).
-        refit: bool
-            If True, the model is refit using only the variables that have non-zero coefficients in the regularized fit.
-            The refitted model is not regularized.
-        **kwargs_mle:
-            Additional keyword arguments that contain information used when constructing a model using the formula interface.
-        Returns
-        -------
-        statsmodels.base.elastic_net.RegularizedResults wrapped in a HeckmanResults class instance.
-        See Also
-        ---------
-        HeckmanResultsReg
-        """
-
-        ########################################################################
-        # PRIVATE METHOD
-        # Fits using Heckman two-step from Heckman (1979).
-        ########################################################################
-
-        ## prep data
-        Y, X, Z = self.get_datamats()
-
-        ## Step 1
-        step1model = sm.Probit(self.treated, Z)
-        step1res = step1model.fit(disp=False)
-        step1_fitted = np.atleast_2d(step1res.fittedvalues).T
-        step1_varcov = step1res.cov_params()
-
-        inverse_mills = norm.pdf(step1_fitted)/norm.cdf(step1_fitted)
-
-        ## Step 2
-        W = np.hstack((X, inverse_mills[self.treated] ) )
-        step2model = sm.OLS(Y, W)
-        step2res = step2model.fit_regularized(
-            method=method_reg, alpha=alpha_reg, L1_wt=L1_wt,
-            start_params=start_params_reg, profile_scale=profile_scale, refit=refit, **kwargs
-            )
-
-        params = step2res.params[:-1]
-        betaHat_inverse_mills = step2res.params[-1]
-        
-        
-        # compute residuals because RegularizedResults doesn't return resid
-        def resid(self):
-            return self.model.endog - self.model.predict(self.params, self.model.exog)
-        
-        step2res_resid = resid(step2res)
-    
-        params = step2res.params[:-1]
-        betaHat_inverse_mills = step2res.params[-1]
-
-        ## Compute standard errors
-        # Compute estimated error variance of censored regression
-        delta = np.multiply(inverse_mills, inverse_mills + step1_fitted)[self.treated]
-
-        sigma2Hat = step2res_resid.dot(step2res_resid) / self.nobs_uncensored + \
-            (betaHat_inverse_mills**2 * sum(delta)) / self.nobs_uncensored
-        sigma2Hat = sigma2Hat[0]
-        sigmaHat = np.sqrt(sigma2Hat)
-        rhoHat = betaHat_inverse_mills / sigmaHat
-
-        # compute standard errors of beta estimates of censored regression
-        delta_1d = delta.T[0]
-        
-        Q = rhoHat**2 * ((W.T*delta_1d).dot(Z[self.treated])).dot(step1_varcov).dot((Z[self.treated].T*delta_1d).dot(W))
-        
-        WT_W_inv = np.linalg.inv(W.T.dot(W))
-        WT_R = W.T*(1 - rhoHat**2 * delta_1d)
-        normalized_varcov_all = WT_W_inv.dot(WT_R.dot(W)+Q).dot(WT_W_inv)
-        del WT_W_inv
-        del WT_R
-        
-        del delta_1d
-
-        normalized_varcov = normalized_varcov_all[:-1,:-1]
-
-        varcov_all = sigma2Hat * normalized_varcov_all
-        varcov = varcov_all[:-1,:-1]
-
-        stderr_all = np.sqrt(np.diag(varcov_all))
-        stderr = stderr_all[:-1]
-        stderr_betaHat_inverse_mills = stderr_all[-1]
-
-
-        ## store results
-        results = HeckmanResultsReg(self, params, normalized_varcov, sigma2Hat,
-            select_res=step1res,
-            params_inverse_mills=betaHat_inverse_mills, stderr_inverse_mills=stderr_betaHat_inverse_mills,
-            var_reg_error=sigma2Hat, corr_eqnerrors=rhoHat,
-            method='twostep', method_reg=method_reg, alpha_reg=alpha_reg, L1_wt=L1_wt)
-
-        return results
-
-
     def _fit_twostep(self):
         ########################################################################
         # PRIVATE METHOD
@@ -316,6 +204,7 @@ class Heckman(base.LikelihoodModel):
 
         ## prep data
         Y, X, Z = self.get_datamats()
+        
 
         ## Step 1
         step1model = sm.Probit(self.treated, Z)
@@ -328,7 +217,7 @@ class Heckman(base.LikelihoodModel):
         ## Step 2
         W = np.hstack((X, inverse_mills[self.treated] ) )
         step2model = sm.OLS(Y, W)
-        step2res = step2model.fit()
+        step2res = step2model.fit_regularized()
 
         params = step2res.params[:-1]
         betaHat_inverse_mills = step2res.params[-1]
@@ -733,8 +622,6 @@ class HeckmanResults(base.LikelihoodModelResults):
             methodstr = 'Heckman Two-Step'
         elif self.method=='mle':
             methodstr = 'Maximum Likelihood'
-        elif self.method=='twostep_reg':
-            methodstr = 'Heckman Two-Step Regularized'
         else:
             raise ValueError("Invalid method set")
 
@@ -762,7 +649,7 @@ class HeckmanResults(base.LikelihoodModelResults):
         smry.add_table_params(self, yname=yname, xname=xname, alpha=alpha,
                              use_t=self.use_t)
         
-
+        
         # add the selection equation estimates table
         smry.add_table_params(self.select_res, yname=yname, xname=zname, alpha=alpha,
                              use_t=self.select_res.use_t)
@@ -791,236 +678,6 @@ class HeckmanResults(base.LikelihoodModelResults):
             'Tabel kedua: estimasi z* = wγ + u (selection equation).',
             'Tabel ketiga: estimasi koefisien dari inverse Mills ratio (Heckman\'s λ).'])
         
-        
-
-        ## return
-        return smry
-
-class HeckmanResultsReg(base.LikelihoodModelResults):
-    """
-    Class to represent results/fits for Heckman model.
-    Attributes
-    ----------
-    select_res : ProbitResult object
-        The ProbitResult object created when estimating the selection equation.
-    params_inverse_mills : scalar
-        Parameter estimate of the coef on the inverse Mills term in the second step.
-    stderr_inverse_mills : scalar
-        Standard error of the parameter estimate of the coef on the inverse Mills 
-        term in the second step.
-    var_reg_error : scalar
-        Estimate of the "sigma" term, i.e. the error variance estimate of the 
-        regression (response) equation
-    corr_eqnerrors : scalar
-        Estimate of the "rho" term, i.e. the correlation estimate of the errors between the
-        regression (response) equation and the selection equation
-    method : string
-        The method used to produce the estimates, i.e. 'twostep', 'mle'
-    """
-
-    def __init__(self, model, params, normalized_cov_params=None, scale=1.,
-        select_res=None,
-        params_inverse_mills=None, stderr_inverse_mills=None,
-        var_reg_error=None, corr_eqnerrors=None,
-        method=None, method_reg=None, alpha_reg=None, L1_wt=None):
-
-        super(HeckmanResultsReg, self).__init__(model, params,
-                                                normalized_cov_params,
-                                                scale)
-
-        self.select_res = select_res
-        self.params_inverse_mills = params_inverse_mills
-        self.stderr_inverse_mills = stderr_inverse_mills
-        self.var_reg_error = var_reg_error
-        self.corr_eqnerrors = corr_eqnerrors
-        self.method = method
-        self.method_reg = method_reg
-        self.alpha_reg = alpha_reg
-        self.L1_wt = L1_wt
-
-        if not hasattr(self, 'use_t'):
-            self.use_t = False
-
-        if not hasattr(self.select_res, 'use_t'):
-            self.select_res.use_t = False
-
-    def ex_smry(self, yname=None, xname=None, zname=None, title=None, alpha=.05):
-        
-        if xname is None and self.model.exog_names is not None:
-            xname=self.model.exog_names
-        elif xname is None and self.model.exog_names is None:
-            try:
-                xname = ['x' + str(i) for i in range(len(self.model.exog[0]))]
-                xname[0]  = 'x0_or_xconst'
-            except TypeError:
-                xname = 'x0_or_xconst'
-        
-        try:  # for Python 3
-            if isinstance(xname, str):
-                xname = [xname]
-        except NameError:  # for Python 2
-            if isinstance(xname, basestring):
-                xname = [xname]
-        
-        exsum = pd.DataFrame(xname)
-        exsum.columns = ['Variabel']
-        
-        coeff = []
-        for i in range(len(exsum)):
-            # extract the corresponding value from the params list
-            param_value = self.params[i]
-            # append the value to the coefficient list
-            coeff.append(param_value)
-
-        # add the pvalues list as a new column to the DataFrame
-        exsum['Coefficient'] = coeff
-        
-        p_val = []
-        for i in range(len(exsum)):
-            # extract the corresponding value from the pvalue list
-            p_values = self.pvalues[i]
-            # append the value to the pvalues list
-            p_val.append(p_values)
-
-        # add the pvalues list as a new column to the DataFrame
-        exsum['p-value'] = p_val
-        
-        return exsum
-        
-    
-    
-    def summary(self, yname=None, xname=None, zname=None, title=None, alpha=.05):
-        """Summarize the Heckman model Results
-        Parameters
-        -----------
-        yname : string, optional
-            Default is `y`
-        xname : list of strings, optional
-            Default is `x_##` for ## in p the number of regressors
-            in the regression (response) equation.
-        zname : list of strings, optional
-            Default is `z_##` for ## in p the number of regressors
-            in the selection equation.
-        title : string, optional
-            Title for the top table. If not None, then this replaces the
-            default title
-        alpha : float
-            significance level for the confidence intervals
-        Returns
-        -------
-        smry : Summary instance
-            this holds the summary tables and text, which can be printed or
-            converted to various output formats.
-        See Also
-        --------
-        statsmodels.iolib.summary.Summary : class to hold summary
-            results
-        """
-
-        ## Put in Z name detected from data if none supplied, unless that too could not be
-        ## inferred from data, then put in generic names
-
-        
-        if zname is None and self.model.exog_select_names is not None:
-            zname=self.model.exog_select_names
-        elif zname is None and self.model.exog_select_names is None:
-            try:
-                zname = ['z' + str(i) for i in range(len(self.model.exog_select[0]))]
-                zname[0]  = 'z0_or_zconst'
-            except TypeError:
-                zname = 'z0_or_zconst'
-
-        try:  # for Python 3
-            if isinstance(zname, str):
-                zname = [zname]
-        except NameError:  # for Python 2
-            if isinstance(zname, basestring):
-                zname = [zname]
-
-
-        ## create summary object
-        # instantiate the object
-        smry = summary.Summary()
-
-        # add top info
-        if self.method=='twostep':
-            methodstr = 'Heckman Two-Step Regularized'
-        else:
-            raise ValueError("Invalid method set")
-            
-        if self.alpha_reg == 0:
-            pen = ' (No Penalty)'
-        else:
-            pen = ''
-        
-        # if alpha_reg = 0 and L1_wt = 0 the fit_regularized() result = OLS fit()    
-        if self.method_reg == 'elastic_net' and 0 < self.L1_wt < 1:
-            methodregstr = 'Elastic Net' + pen
-        elif self.method_reg == 'elastic_net' and self.L1_wt == 0:
-            methodregstr = 'Elastic Net, Ridge Fit' + pen
-        elif self.method_reg == 'elastic_net' and self.L1_wt == 1:
-            methodregstr = 'Elastic Net, Lasso Fit' + pen
-        elif self.method_reg == 'sqrt_lasso':
-            methodregstr = 'Square-root Lasso' + pen
-        else:
-            raise ValueError("Invalid regularization method set")
-
-
-        top_left = [('Dep. Variable:', None),
-                    ('Model:', None),
-                    ('Method:', [methodstr]),
-                    ('Regularization Method:',[methodregstr]),
-                    ('Alpha:',["%.2f" % self.alpha_reg]),
-                    ('L1 Weight:',["%.2f" % self.L1_wt]),
-                    ('No. Total Obs.:', ["%#i" % self.model.nobs_total]),
-                    ('No. Censored Obs.:', ["%#i" % self.model.nobs_censored]),
-                    ('No. Uncensored Obs.:', ["%#i" % self.model.nobs_uncensored]),
-                    ]
-
-        if hasattr(self, 'cov_type'):
-            top_left.append(('Covariance Type:', [self.cov_type]))
-
-        top_right = [
-                     ]
-
-        if title is None:
-            title = self.model.__class__.__name__ + ' ' + "Regression Results"
-
-        smry.add_table_2cols(self, gleft=top_left, gright=top_right,
-                          yname=yname, xname=xname, title=title)
-        
-        # add the Heckman-corrected regression table
-        smry.add_table_params(self, yname=yname, xname=xname, alpha=alpha,
-                             use_t=self.use_t)
-        
-
-        # add the selection equation estimates table
-        smry.add_table_params(self.select_res, yname=yname, xname=zname, alpha=alpha,
-                             use_t=self.select_res.use_t)
-
-        # add the estimate to the inverse Mills estimate (z-score)
-        smry.add_table_params(
-            base.LikelihoodModelResults(None, np.atleast_1d(self.params_inverse_mills), 
-            normalized_cov_params=np.atleast_1d(self.stderr_inverse_mills**2), scale=1.), 
-            yname=None, xname=['IMR (Lambda)'], alpha=alpha, 
-            use_t=False)
-        
-        # add point estimates for rho and sigma
-        diagn_left = [('rho:', ["%#6.3f" % self.corr_eqnerrors]),
-                      ('sigma:', ["%#6.3f" % np.sqrt(self.var_reg_error)]),
-                      ]
-
-        diagn_right = [
-                       ]
-
-        smry.add_table_2cols(self, gleft=diagn_left, gright=diagn_right,
-                          yname=yname, xname=xname,
-                          title="")
-
-        # keterangan
-        smry.add_extra_txt(['Tabel pertama: estimasi y* = xβ + ε (response regression equation).',
-            'Tabel kedua: estimasi z* = wγ + u (selection equation).',
-            'Tabel ketiga: estimasi koefisien dari inverse Mills ratio (Heckman\'s λ).'])
         
 
         ## return
