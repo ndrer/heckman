@@ -6,6 +6,7 @@ from statsmodels.iolib import summary
 from statsmodels.tools.numdiff import approx_fprime
 from scipy.stats import norm
 import warnings
+import pingouin as pg
 
 class Heckman(base.LikelihoodModel):
     """
@@ -242,6 +243,8 @@ class Heckman(base.LikelihoodModel):
         step1_fitted = np.atleast_2d(step1res.fittedvalues).T
         step1_varcov = step1res.cov_params()
 
+        step1res_resid = step1res.resid_dev
+
         inverse_mills = norm.pdf(step1_fitted)/norm.cdf(step1_fitted)
 
         ## Step 2
@@ -298,12 +301,25 @@ class Heckman(base.LikelihoodModel):
         stderr_betaHat_inverse_mills = stderr_all[-1]
 
 
+        # for calculating Henze-Zirkler multivariate normality test
+        step1res_resid = step1res_resid[np.random.choice(step1res_resid.shape[0], size=step2res_resid.shape[0], replace=False)]
+
+        h_z = pg.multivariate_normality((np.column_stack((step1res_resid, step2res_resid))))
+
+        hz_test = h_z.hz
+        hz_pval = h_z.pval
+        hz_normal = h_z.normal
+
+
+
         ## store results
         results = HeckmanResultsReg(self, params, normalized_varcov, sigma2Hat,
             select_res=step1res,
             params_inverse_mills=betaHat_inverse_mills, stderr_inverse_mills=stderr_betaHat_inverse_mills,
             var_reg_error=sigma2Hat, corr_eqnerrors=rhoHat,
-            method='twostep', method_reg=method_reg, alpha_reg=alpha_reg, L1_wt=L1_wt)
+            method='twostep',
+            method_reg=method_reg, alpha_reg=alpha_reg, L1_wt=L1_wt,
+            hz_test=hz_test, hz_pval=hz_pval, hz_normal=hz_normal)
 
         return results
 
@@ -323,12 +339,16 @@ class Heckman(base.LikelihoodModel):
         step1_fitted = np.atleast_2d(step1res.fittedvalues).T
         step1_varcov = step1res.cov_params()
 
+        step1res_resid = step1res.resid_dev
+
         inverse_mills = norm.pdf(step1_fitted)/norm.cdf(step1_fitted)
 
         ## Step 2
         W = np.hstack((X, inverse_mills[self.treated] ) )
         step2model = sm.OLS(Y, W)
         step2res = step2model.fit()
+
+        step2res_resid = step2res.resid
 
         params = step2res.params[:-1]
         betaHat_inverse_mills = step2res.params[-1]
@@ -366,13 +386,22 @@ class Heckman(base.LikelihoodModel):
         stderr = stderr_all[:-1]
         stderr_betaHat_inverse_mills = stderr_all[-1]
 
+        # for calculating Henze-Zirkler multivariate normality test
+        step1res_resid = step1res_resid[np.random.choice(step1res_resid.shape[0], size=step2res_resid.shape[0], replace=False)]
+
+        h_z = pg.multivariate_normality((np.column_stack((step1res_resid, step2res_resid))))
+
+        hz_test = h_z.hz
+        hz_pval = h_z.pval
+        hz_normal = h_z.normal
 
         ## store results
         results = HeckmanResults(self, params, normalized_varcov, sigma2Hat,
             select_res=step1res,
             params_inverse_mills=betaHat_inverse_mills, stderr_inverse_mills=stderr_betaHat_inverse_mills,
             var_reg_error=sigma2Hat, corr_eqnerrors=rhoHat,
-            method='twostep')
+            method='twostep',
+            hz_test=hz_test, hz_pval=hz_pval, hz_normal=hz_normal)
 
         return results
 
@@ -445,12 +474,16 @@ class Heckman(base.LikelihoodModel):
 
         DUMMY_COEF_STDERR_IMR = 0.
 
+        hz_test = 0
+        hz_pval = 1
+        hz_normal = '-'
+
         results = HeckmanResults(self, xbeta_hat, 
             xbeta_ncov_hat, scale,
             select_res=base.LikelihoodModelResults(None, zbeta_hat, zbeta_ncov_hat, scale),
             params_inverse_mills=imr_hat, stderr_inverse_mills=imr_stderr_hat,
             var_reg_error=sigma_hat**2, corr_eqnerrors=rho_hat,
-            method='mle')
+            method='mle', hz_test=hz_test, hz_pval=hz_pval, hz_normal=hz_normal)
 
         return results
 
@@ -611,7 +644,8 @@ class HeckmanResults(base.LikelihoodModelResults):
         select_res=None,
         params_inverse_mills=None, stderr_inverse_mills=None,
         var_reg_error=None, corr_eqnerrors=None,
-        method=None):
+        method=None,
+        hz_test=None, hz_pval=None, hz_normal=None):
 
         super(HeckmanResults, self).__init__(model, params,
                                                 normalized_cov_params,
@@ -623,6 +657,20 @@ class HeckmanResults(base.LikelihoodModelResults):
         self.var_reg_error = var_reg_error
         self.corr_eqnerrors = corr_eqnerrors
         self.method = method
+        self.hz_test = hz_test
+        self.hz_pval = hz_pval
+
+        # add info for Henze-Zirkler test
+        if self.method=='twostep':    
+            self.hz_normal = hz_normal
+        elif self.method=='mle':
+            self.hz_normal = '-'
+        else:
+            raise ValueError("Invalid method set")
+
+        self.hz_test = hz_test
+        self.hz_pval = hz_pval
+        self.hz_normal = hz_normal
 
         if not hasattr(self, 'use_t'):
             self.use_t = False
@@ -733,8 +781,6 @@ class HeckmanResults(base.LikelihoodModelResults):
             methodstr = 'Heckman Two-Step'
         elif self.method=='mle':
             methodstr = 'Maximum Likelihood'
-        elif self.method=='twostep_reg':
-            methodstr = 'Heckman Two-Step Regularized'
         else:
             raise ValueError("Invalid method set")
 
@@ -785,6 +831,19 @@ class HeckmanResults(base.LikelihoodModelResults):
         smry.add_table_2cols(self, gleft=diagn_left, gright=diagn_right,
                           yname=yname, xname=xname,
                           title="")
+        
+        # add estimates for Henze-Zirkler test
+        diagn_left = [('Henze-Zirkler multivariate normality test:', ["%#6.3f" % self.hz_test]),
+                      ('p-value:', ["%#6.3f" % self.hz_pval]),
+                      ('Jointly normal?', str(self.hz_normal)),
+                      ]
+
+        diagn_right = [
+                       ]
+
+        smry.add_table_2cols(self, gleft=diagn_left, gright=diagn_right,
+                          yname=yname, xname=xname,
+                          title="")
 
         # keterangan
         smry.add_extra_txt(['Tabel pertama: estimasi y* = xβ + ε (response regression equation).',
@@ -822,7 +881,8 @@ class HeckmanResultsReg(base.LikelihoodModelResults):
         select_res=None,
         params_inverse_mills=None, stderr_inverse_mills=None,
         var_reg_error=None, corr_eqnerrors=None,
-        method=None, method_reg=None, alpha_reg=None, L1_wt=None):
+        method=None, method_reg=None, alpha_reg=None, L1_wt=None,
+        hz_test=None, hz_pval=None, hz_normal=None):
 
         super(HeckmanResultsReg, self).__init__(model, params,
                                                 normalized_cov_params,
@@ -837,6 +897,9 @@ class HeckmanResultsReg(base.LikelihoodModelResults):
         self.method_reg = method_reg
         self.alpha_reg = alpha_reg
         self.L1_wt = L1_wt
+        self.hz_test = hz_test
+        self.hz_pval = hz_pval
+        self.hz_normal = hz_normal
 
         if not hasattr(self, 'use_t'):
             self.use_t = False
@@ -1008,6 +1071,19 @@ class HeckmanResultsReg(base.LikelihoodModelResults):
         # add point estimates for rho and sigma
         diagn_left = [('rho:', ["%#6.3f" % self.corr_eqnerrors]),
                       ('sigma:', ["%#6.3f" % np.sqrt(self.var_reg_error)]),
+                      ]
+
+        diagn_right = [
+                       ]
+
+        smry.add_table_2cols(self, gleft=diagn_left, gright=diagn_right,
+                          yname=yname, xname=xname,
+                          title="")
+        
+        # add estimates for Henze-Zirkler test
+        diagn_left = [('Henze-Zirkler multivariate normality test:', ["%#6.3f" % self.hz_test]),
+                      ('p-value:', ["%#6.3f" % self.hz_pval]),
+                      ('Jointly normal?', str(self.hz_normal)),
                       ]
 
         diagn_right = [
